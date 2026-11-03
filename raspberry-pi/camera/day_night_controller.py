@@ -21,8 +21,8 @@ class CameraConfig:
     frame_duration_max: int = 66667
 
     # Seuils de luminosité avec hystérésis
-    night_threshold: float = 45.0
-    day_threshold: float = 60.0
+    night_threshold: float = 40.0
+    day_threshold: float = 45.0
 
     # Exposition : microsecondes
     day_exposure_us: int = 10000
@@ -147,7 +147,7 @@ class DayNightCameraController:
         if self._brightness_ema is None:
             self._brightness_ema = brightness
         else:
-            alpha = 0.10
+            alpha = 0.20
             self._brightness_ema = (
                 alpha * brightness
                 + (1 - alpha) * self._brightness_ema
