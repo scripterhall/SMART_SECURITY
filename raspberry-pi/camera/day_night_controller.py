@@ -14,24 +14,25 @@ from libcamera import controls
 
 @dataclass
 class CameraConfig:
-    width: int = 1296
-    height: int = 972
+    night_width: int = 1296
+    night_height: int = 972
+
+    day_width: int = 2592
+    day_height: int = 1944
 
     # Limites générales de cadence :
     # jusqu'à 100 ms par image.
     frame_duration_min: int = 40000
     frame_duration_max: int = 100000
 
-    # PROFIL JOUR
+    # PROFIL JOUR : exposition et gain automatiques.
     day_start = datetime_time(6, 0)
-    day_exposure_us: int = 80000
-    day_gain: float = 6.0
-    day_frame_duration_us: int = 85000
+    day_frame_duration_us: int = 100000
 
     # PROFIL NUIT
     night_start = datetime_time(19, 1)
     night_exposure_us: int = 70000
-    night_gain: float = 16.0
+    night_gain: float = 120.0
     night_frame_duration_us: int = 75000
 
     tuning_file: str = (
@@ -65,6 +66,7 @@ class DayNightCameraController:
 
         self._current_exposure = 0
         self._current_gain = 0.0
+        self._configured_size = None
 
         self._fps_count = 0
         self._fps_start = time.monotonic()
@@ -101,51 +103,80 @@ class DayNightCameraController:
     def _apply_mode(self, mode: str):
 
         if mode == "day":
-
-            exposure = self.config.day_exposure_us
-            gain = self.config.day_gain
+            width = self.config.day_width
+            height = self.config.day_height
             frame_duration = self.config.day_frame_duration_us
-
+            exposure = None
+            gain = None
+            mode_controls = {
+                "AeEnable": True,
+                "AeMeteringMode": controls.AeMeteringModeEnum.CentreWeighted,
+                "AwbEnable": True,
+            }
         else:
-
+            width = self.config.night_width
+            height = self.config.night_height
             exposure = self.config.night_exposure_us
             gain = self.config.night_gain
             frame_duration = self.config.night_frame_duration_us
+            mode_controls = {
+                "AeEnable": False,
+                "ExposureTime": exposure,
+                "AnalogueGain": gain,
+                "AeMeteringMode": controls.AeMeteringModeEnum.CentreWeighted,
+                "AwbEnable": True,
+            }
+
+        size = (width, height)
+        if size != self._configured_size:
+            self.camera.stop()
+            self._configure_camera(mode)
+            self.camera.start()
 
         self.camera.set_controls({
-
-            "AeEnable": False,
-
-            "ExposureTimeMode":
-                controls.ExposureTimeModeEnum.Manual,
-
-            "AnalogueGainMode":
-                controls.AnalogueGainModeEnum.Manual,
-
-            "ExposureTime": exposure,
-
-            "AnalogueGain": gain,
-
-            "AwbEnable": True,
-
+            **mode_controls,
             "FrameDurationLimits": (
                 frame_duration,
                 frame_duration
             ),
-
         })
 
-        self._current_exposure = exposure
-        self._current_gain = gain
+        self._current_exposure = exposure or 0
+        self._current_gain = gain or 0.0
         self._mode = mode
 
         self.logger.info(
-            "MODE %s ACTIVE | Exposure=%d us | Gain=%.2f | FrameDuration=%d us",
+            "MODE %s ACTIVE | Exposure=%s | Gain=%s | FrameDuration=%d us",
             mode.upper(),
-            exposure,
-            gain,
+            f"{exposure} us" if exposure is not None else "auto",
+            gain if gain is not None else "auto",
             frame_duration
         )
+
+    def _configure_camera(self, mode: str):
+        if mode == "day":
+            width = self.config.day_width
+            height = self.config.day_height
+        else:
+            width = self.config.night_width
+            height = self.config.night_height
+
+        video_config = self.camera.create_video_configuration(
+            main={
+                "size": (width, height),
+                "format": "RGB888"
+            },
+            controls={
+                "FrameDurationLimits": (
+                    self.config.frame_duration_min,
+                    self.config.frame_duration_max
+                )
+            },
+            buffer_count=4
+        )
+
+        self.camera.configure(video_config)
+        self._configured_size = (width, height)
 
     # =====================================================
     # 3. INITIALISATION CAMERA
@@ -164,27 +195,8 @@ class DayNightCameraController:
             tuning=self.config.tuning_file
         )
 
-        video_config = self.camera.create_video_configuration(
-
-            main={
-                "size": (
-                    self.config.width,
-                    self.config.height
-                ),
-                "format": "RGB888"
-            },
-
-            controls={
-                "FrameDurationLimits": (
-                    self.config.frame_duration_min,
-                    self.config.frame_duration_max
-                )
-            },
-
-            buffer_count=4
-        )
-
-        self.camera.configure(video_config)
+        initial_mode = self._get_scheduled_mode()
+        self._configure_camera(initial_mode)
 
         self.camera.start()
 
@@ -193,8 +205,6 @@ class DayNightCameraController:
 
         # Appliquer directement le mode correspondant
         # à l'heure actuelle.
-        initial_mode = self._get_scheduled_mode()
-
         self._apply_mode(initial_mode)
 
         time.sleep(0.5)
