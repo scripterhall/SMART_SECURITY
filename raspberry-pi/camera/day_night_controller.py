@@ -55,7 +55,7 @@ class DayNightCameraController:
 
         self._low_light_color_matrix = np.array(
             [
-                [0.95, 0.0, 0.0],
+                [0.90, 0.0, 0.0],
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.05],
             ],
