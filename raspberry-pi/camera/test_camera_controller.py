@@ -30,9 +30,9 @@ try:
 
             text = (
                 f"Mode: {status['mode']} | "
-                f"FPS: {status['fps']} | "
-                f"Gain: {status['analogue_gain']} | "
-                f"Exposure: {status['exposure_us']} us"
+                f"Filtre luminosité: "
+                f"{'actif' if status['brightness_filter'] else 'inactif'} | "
+                f"FPS: {status['fps']}"
             )
 
             cv2.putText(

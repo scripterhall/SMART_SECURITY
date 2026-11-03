@@ -14,26 +14,14 @@ from libcamera import controls
 
 @dataclass
 class CameraConfig:
-    night_width: int = 1296
-    night_height: int = 972
+    width: int = 2592
+    height: int = 1944
 
-    day_width: int = 2592
-    day_height: int = 1944
-
-    # Limites générales de cadence :
-    # jusqu'à 100 ms par image.
     frame_duration_min: int = 40000
     frame_duration_max: int = 100000
 
-    # PROFIL JOUR : exposition et gain automatiques.
-    day_start = datetime_time(6, 0)
-    day_frame_duration_us: int = 100000
-
-    # PROFIL NUIT
-    night_start = datetime_time(19, 1)
-    night_exposure_us: int = 70000
-    night_gain: float = 120.0
-    night_frame_duration_us: int = 75000
+    brightness_filter_start: datetime_time = datetime_time(19, 30)
+    brightness_boost: int = 8
 
     tuning_file: str = (
         "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json"
@@ -55,118 +43,27 @@ class DayNightCameraController:
 
         self._status = {
             "running": False,
-            "mode": "initializing",
+            "mode": "day",
+            "brightness_filter": False,
             "brightness": 0.0,
-            "exposure_us": 0,
-            "analogue_gain": 0.0,
             "fps": 0.0,
         }
-
-        self._mode = None
-
-        self._current_exposure = 0
-        self._current_gain = 0.0
-        self._configured_size = None
 
         self._fps_count = 0
         self._fps_start = time.monotonic()
 
-        # Création unique du CLAHE.
-        self.clahe = cv2.createCLAHE(
-            clipLimit=2.0,
-            tileGridSize=(8, 8)
-        )
-
         self.logger = logging.getLogger("CameraController")
 
-    # =====================================================
-    # 1. DETERMINATION DU MODE SELON L'HEURE
-    # =====================================================
-
-    def _get_scheduled_mode(self) -> str:
-
-        current_time = datetime.now().time()
-
-        if (
-            self.config.day_start
-            <= current_time
-            < self.config.night_start
-        ):
-            return "day"
-
-        return "night"
-
-    # =====================================================
-    # 2. APPLICATION DU PROFIL CAMERA
-    # =====================================================
-
-    def _apply_mode(self, mode: str):
-
-        if mode == "day":
-            width = self.config.day_width
-            height = self.config.day_height
-            frame_duration = self.config.day_frame_duration_us
-            exposure = None
-            gain = None
-            mode_controls = {
-                "AeEnable": True,
-                "AeMeteringMode": controls.AeMeteringModeEnum.CentreWeighted,
-                "AwbEnable": True,
-            }
-        else:
-            width = self.config.night_width
-            height = self.config.night_height
-            exposure = self.config.night_exposure_us
-            gain = self.config.night_gain
-            frame_duration = self.config.night_frame_duration_us
-            mode_controls = {
-                "AeEnable": False,
-                "ExposureTime": exposure,
-                "AnalogueGain": gain,
-                "AeMeteringMode": controls.AeMeteringModeEnum.CentreWeighted,
-                "AwbEnable": True,
-            }
-
-        size = (width, height)
-        if size != self._configured_size:
-            self.camera.stop()
-            self._configure_camera(mode)
-            self.camera.start()
-
-        self.camera.set_controls({
-            **mode_controls,
-            "FrameDurationLimits": (
-                frame_duration,
-                frame_duration
-            ),
-        })
-
-        self._current_exposure = exposure or 0
-        self._current_gain = gain or 0.0
-        self._mode = mode
-
-        self.logger.info(
-            "MODE %s ACTIVE | Exposure=%s | Gain=%s | FrameDuration=%d us",
-            mode.upper(),
-            f"{exposure} us" if exposure is not None else "auto",
-            gain if gain is not None else "auto",
-            frame_duration
-        )
-
-    def _configure_camera(self, mode: str):
-        if mode == "day":
-            width = self.config.day_width
-            height = self.config.day_height
-        else:
-            width = self.config.night_width
-            height = self.config.night_height
-
+    def _configure_camera(self):
         video_config = self.camera.create_video_configuration(
             main={
-                "size": (width, height),
+                "size": (self.config.width, self.config.height),
                 "format": "RGB888"
             },
             controls={
+                "AeEnable": True,
+                "AeMeteringMode": controls.AeMeteringModeEnum.CentreWeighted,
+                "AwbEnable": True,
                 "FrameDurationLimits": (
                     self.config.frame_duration_min,
                     self.config.frame_duration_max
@@ -176,7 +73,6 @@ class DayNightCameraController:
         )
 
         self.camera.configure(video_config)
-        self._configured_size = (width, height)
 
     # =====================================================
     # 3. INITIALISATION CAMERA
@@ -195,19 +91,12 @@ class DayNightCameraController:
             tuning=self.config.tuning_file
         )
 
-        initial_mode = self._get_scheduled_mode()
-        self._configure_camera(initial_mode)
+        self._configure_camera()
 
         self.camera.start()
 
         # Attendre la stabilisation initiale.
         time.sleep(1.0)
-
-        # Appliquer directement le mode correspondant
-        # à l'heure actuelle.
-        self._apply_mode(initial_mode)
-
-        time.sleep(0.5)
 
         self._stop_event.clear()
 
@@ -223,8 +112,9 @@ class DayNightCameraController:
             self._status["running"] = True
 
         self.logger.info(
-            "Camera started successfully | Mode=%s",
-            initial_mode.upper()
+            "Camera started successfully | Profile=DAY | Resolution=%dx%d",
+            self.config.width,
+            self.config.height
         )
 
     # =====================================================
@@ -244,21 +134,24 @@ class DayNightCameraController:
     # 5. TRAITEMENT IMAGE
     # =====================================================
 
-    def _process_frame(self, rgb_frame: np.ndarray):
-
-        if self._mode == "night":
-
-            gray = cv2.cvtColor(
-                rgb_frame,
-                cv2.COLOR_RGB2GRAY
-            )
-
-            return self.clahe.apply(gray)
-
-        return cv2.cvtColor(
+    def _process_frame(
+        self,
+        rgb_frame: np.ndarray,
+        brightness_filter: bool = False
+    ):
+        processed = cv2.cvtColor(
             rgb_frame,
             cv2.COLOR_RGB2BGR
         )
+
+        if brightness_filter:
+            processed = cv2.convertScaleAbs(
+                processed,
+                alpha=1.0,
+                beta=self.config.brightness_boost
+            )
+
+        return processed
 
     # =====================================================
     # 6. BOUCLE PRINCIPALE
@@ -270,18 +163,6 @@ class DayNightCameraController:
 
             try:
 
-                # Vérification de l'heure à chaque image.
-                scheduled_mode = self._get_scheduled_mode()
-
-                # Application uniquement lors d'un changement.
-                if scheduled_mode != self._mode:
-
-                    self.logger.info(
-                        "Changement horaire détecté"
-                    )
-
-                    self._apply_mode(scheduled_mode)
-
                 # Capture image.
                 rgb_frame = self.camera.capture_array()
 
@@ -289,9 +170,14 @@ class DayNightCameraController:
                     rgb_frame
                 )
 
-                # Traitement selon le mode actif.
+                brightness_filter = (
+                    datetime.now().time()
+                    >= self.config.brightness_filter_start
+                )
+
                 processed = self._process_frame(
-                    rgb_frame
+                    rgb_frame,
+                    brightness_filter=brightness_filter
                 )
 
                 # Calcul FPS réel.
@@ -318,17 +204,12 @@ class DayNightCameraController:
 
                     self._status.update({
 
-                        "mode": self._mode,
+                        "mode": "day",
+
+                        "brightness_filter": brightness_filter,
 
                         "brightness": round(
                             brightness,
-                            2
-                        ),
-
-                        "exposure_us": self._current_exposure,
-
-                        "analogue_gain": round(
-                            self._current_gain,
                             2
                         ),
 
@@ -393,5 +274,6 @@ class DayNightCameraController:
             self._latest_frame = None
             self._status["running"] = False
             self._status["mode"] = "stopped"
+            self._status["brightness_filter"] = False
 
         self.logger.info("Caméra arrêtée")
