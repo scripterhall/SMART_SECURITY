@@ -21,8 +21,8 @@ class CameraConfig:
     frame_duration_max: int = 66667
 
     # Seuils de luminosité avec hystérésis
-    night_threshold: float = 40.0
-    day_threshold: float = 44.0
+    night_threshold: float = 33.0
+    day_threshold: float = 40.0
 
     # Exposition : microsecondes
     day_exposure_us: int = 10000
