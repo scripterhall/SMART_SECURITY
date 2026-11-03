@@ -1,14 +1,14 @@
 
 import argparse
 import logging
+import sys
 import time
+from pathlib import Path
 
 import cv2
 
 from gpiozero import DistanceSensor
 from ultralytics import YOLO
-
-from camera.day_night_controller import DayNightCameraController
 
 from config.settings import (
     TRIG_PIN,
@@ -22,6 +22,12 @@ from config.settings import (
     CRITICAL_DISTANCE_CM,
     WINDOW_NAME
 )
+
+RASPBERRY_PI_DIR = Path(__file__).resolve().parents[1]
+if str(RASPBERRY_PI_DIR) not in sys.path:
+    sys.path.insert(0, str(RASPBERRY_PI_DIR))
+
+from camera.day_night_controller import DayNightCameraController
 
 
 # =========================================================
@@ -160,7 +166,16 @@ def main(headless=False):
 
         logger.info("Loading YOLO model...")
 
-        model = YOLO(str(MODEL_PATH))
+        model_path = str(MODEL_PATH)
+        if not MODEL_PATH.is_file():
+            model_path = MODEL_PATH.name
+            logger.warning(
+                "Local model not found at %s; asking Ultralytics to load %s",
+                MODEL_PATH,
+                model_path
+            )
+
+        model = YOLO(model_path)
 
         logger.info("YOLO model loaded successfully")
 
@@ -323,8 +338,8 @@ def main(headless=False):
         logger.info("Stopping application...")
 
     except Exception:
-
         logger.exception("Application error")
+        raise
 
     finally:
 
@@ -333,10 +348,16 @@ def main(headless=False):
         # ---------------------------------------------
 
         if camera is not None:
-            camera.stop()
+            try:
+                camera.stop()
+            except Exception:
+                logger.exception("Failed to stop camera cleanly")
 
         if sensor is not None:
-            sensor.close()
+            try:
+                sensor.close()
+            except Exception:
+                logger.exception("Failed to close distance sensor cleanly")
 
         if not headless:
             cv2.destroyAllWindows()

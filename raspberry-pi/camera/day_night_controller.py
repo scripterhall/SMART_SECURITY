@@ -33,6 +33,7 @@ class DayNightCameraController:
         self.config = config or CameraConfig()
 
         self.camera = None
+        self._camera_started = False
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -93,6 +94,7 @@ class DayNightCameraController:
         self._configure_camera()
 
         self.camera.start()
+        self._camera_started = True
 
         # Attendre la stabilisation initiale.
         time.sleep(1.0)
@@ -260,16 +262,21 @@ class DayNightCameraController:
 
             self._capture_thread.join(timeout=5)
 
-        self.camera.stop()
-        self.camera.close()
+        camera = self.camera
+        try:
+            if self._camera_started:
+                camera.stop()
+        finally:
+            self._camera_started = False
+            try:
+                camera.close()
+            finally:
+                self.camera = None
 
-        self.camera = None
-
-        with self._lock:
-
-            self._latest_frame = None
-            self._status["running"] = False
-            self._status["mode"] = "stopped"
-            self._status["brightness_filter"] = False
+                with self._lock:
+                    self._latest_frame = None
+                    self._status["running"] = False
+                    self._status["mode"] = "stopped"
+                    self._status["brightness_filter"] = False
 
         self.logger.info("Caméra arrêtée")
