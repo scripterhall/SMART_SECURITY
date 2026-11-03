@@ -335,8 +335,8 @@ def main(headless=False):
             CameraConfig(
                 width=CAMERA_WIDTH,
                 height=CAMERA_HEIGHT,
-                frame_duration_min=33333,
-                frame_duration_max=40000
+                frame_duration_min=50000,
+                frame_duration_max=50000
             )
         )
         camera.start()

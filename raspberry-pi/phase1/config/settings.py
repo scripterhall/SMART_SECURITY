@@ -6,14 +6,14 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 # Caméra
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 960
-CAMERA_FPS = 25
+CAMERA_FPS = 20
 
 # Modèle IA
 MODEL_PATH = BASE_DIR / "models" / "detection" / "yolo26n.pt"
 
 # Détection
 CONFIDENCE_THRESHOLD = 0.40
-IMAGE_SIZE = 640
+IMAGE_SIZE = 480
 PERSON_CLASS_ID = 0
 
 # HC-SR04
