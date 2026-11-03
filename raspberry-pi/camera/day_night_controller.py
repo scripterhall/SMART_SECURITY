@@ -40,6 +40,7 @@ class DayNightCameraController:
         self._capture_thread = None
 
         self._latest_frame = None
+        self._frame_id = 0
 
         self._status = {
             "running": False,
@@ -197,8 +198,8 @@ class DayNightCameraController:
 
                 # Mise à jour des données partagées.
                 with self._lock:
-
                     self._latest_frame = processed
+                    self._frame_id += 1
 
                     self._status.update({
 
@@ -228,13 +229,15 @@ class DayNightCameraController:
     # =====================================================
 
     def get_frame(self) -> Optional[np.ndarray]:
+        frame, _ = self.get_latest_frame()
+        return frame
 
+    def get_latest_frame(self):
         with self._lock:
-
             if self._latest_frame is None:
-                return None
+                return None, self._frame_id
 
-            return self._latest_frame.copy()
+            return self._latest_frame.copy(), self._frame_id
 
     # =====================================================
     # 8. RECUPERATION ETAT CAMERA
@@ -275,6 +278,7 @@ class DayNightCameraController:
 
                 with self._lock:
                     self._latest_frame = None
+                    self._frame_id = 0
                     self._status["running"] = False
                     self._status["mode"] = "stopped"
                     self._status["brightness_filter"] = False

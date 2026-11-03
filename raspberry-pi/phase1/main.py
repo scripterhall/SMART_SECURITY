@@ -104,6 +104,103 @@ class DistanceReader:
             self._thread.join(timeout=1.0)
 
 
+class DetectionWorker:
+
+    def __init__(self, camera, model):
+        self.camera = camera
+        self.model = model
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._detect_loop,
+            name="person-detection",
+            daemon=True
+        )
+        self._detections = []
+        self._frame_id = -1
+        self._fps = 0.0
+        self._last_run = time.monotonic()
+
+    def start(self):
+        self._thread.start()
+
+    def _detect_loop(self):
+        while not self._stop_event.is_set():
+            frame, frame_id = self.camera.get_latest_frame()
+            if frame is None or frame_id == self._frame_id:
+                self._stop_event.wait(0.005)
+                continue
+
+            self._frame_id = frame_id
+            input_height = IMAGE_SIZE * frame.shape[0] // frame.shape[1]
+            inference_frame = cv2.resize(
+                frame,
+                (IMAGE_SIZE, input_height),
+                interpolation=cv2.INTER_AREA
+            )
+
+            try:
+                results = self.model.track(
+                    inference_frame,
+                    persist=True,
+                    classes=[PERSON_CLASS_ID],
+                    conf=CONFIDENCE_THRESHOLD,
+                    imgsz=IMAGE_SIZE,
+                    device="cpu",
+                    verbose=False
+                )
+
+                result = results[0]
+                detections = []
+                if result.boxes is not None:
+                    boxes = result.boxes
+                    coordinates = boxes.xyxy.tolist()
+                    track_ids = (
+                        boxes.id.tolist()
+                        if boxes.id is not None
+                        else [None] * len(coordinates)
+                    )
+                    scale_x = frame.shape[1] / IMAGE_SIZE
+                    scale_y = frame.shape[0] / input_height
+
+                    for coordinates_for_box, track_id in zip(
+                        coordinates,
+                        track_ids
+                    ):
+                        x1, y1, x2, y2 = coordinates_for_box
+                        detections.append((
+                            round(x1 * scale_x),
+                            round(y1 * scale_y),
+                            round(x2 * scale_x),
+                            round(y2 * scale_y),
+                            int(track_id) if track_id is not None else None
+                        ))
+
+                now = time.monotonic()
+                elapsed = now - self._last_run
+                self._last_run = now
+                inference_fps = 1.0 / elapsed if elapsed > 0 else 0.0
+
+                with self._lock:
+                    self._detections = detections
+                    self._fps = inference_fps
+
+            except Exception:
+                logger.exception("Person detection failed")
+                self._stop_event.wait(0.05)
+
+    def get_detections(self):
+        with self._lock:
+            return self._detections.copy(), self._fps
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logger.warning("Detection thread did not stop within 5 seconds")
+
+
 def get_distance_status(distance):
 
     if distance is None:
@@ -122,33 +219,16 @@ def get_distance_status(distance):
 # DRAWING
 # =========================================================
 
-def draw_persons(frame, result, color, displayed_at):
+def draw_persons(frame, detections, color, displayed_at):
 
-    person_count = 0
-
-    if result.boxes is None:
-        return person_count
-
-    boxes = result.boxes
+    person_count = len(detections)
     scale = max(0.7, min(1.1, frame.shape[1] / 1280))
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.75 * scale
     thickness = max(2, round(2 * scale))
     padding = max(5, round(8 * scale))
 
-    for index, box in enumerate(boxes):
-
-        x1, y1, x2, y2 = map(
-            int,
-            box.xyxy[0].tolist()
-        )
-
-        person_id = None
-
-        if boxes.id is not None:
-            person_id = int(
-                boxes.id[index].item()
-            )
+    for x1, y1, x2, y2, person_id in detections:
 
         id_label = (
             f"ID: {person_id}"
@@ -241,6 +321,7 @@ def main(headless=False):
     camera = None
     sensor = None
     distance_reader = None
+    detection_worker = None
 
     try:
 
@@ -253,7 +334,9 @@ def main(headless=False):
         camera = DayNightCameraController(
             CameraConfig(
                 width=CAMERA_WIDTH,
-                height=CAMERA_HEIGHT
+                height=CAMERA_HEIGHT,
+                frame_duration_min=33333,
+                frame_duration_max=40000
             )
         )
         camera.start()
@@ -292,6 +375,8 @@ def main(headless=False):
         model = YOLO(model_path)
 
         logger.info("YOLO model loaded successfully")
+        detection_worker = DetectionWorker(camera, model)
+        detection_worker.start()
 
         # -------------------------------------------------
         # 4. START APPLICATION
@@ -308,7 +393,7 @@ def main(headless=False):
             # A. GET CAMERA FRAME
             # ---------------------------------------------
 
-            frame = camera.get_frame()
+            frame, _ = camera.get_latest_frame()
 
             if frame is None:
                 time.sleep(0.01)
@@ -321,21 +406,7 @@ def main(headless=False):
             camera_status = camera.get_status()
             displayed_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-            # ---------------------------------------------
-            # D. HUMAN DETECTION + TRACKING
-            # ---------------------------------------------
-
-            results = model.track(
-                frame,
-                persist=True,
-                classes=[PERSON_CLASS_ID],
-                conf=CONFIDENCE_THRESHOLD,
-                imgsz=IMAGE_SIZE,
-                device="cpu",
-                verbose=False
-            )
-
-            result = results[0]
+            detections, detection_fps = detection_worker.get_detections()
 
             # Use the latest sensor reading after inference, so a slow
             # detection pass does not make the displayed distance stale.
@@ -348,7 +419,7 @@ def main(headless=False):
 
             person_count = draw_persons(
                 frame,
-                result,
+                detections,
                 color,
                 displayed_at
             )
@@ -428,6 +499,17 @@ def main(headless=False):
 
             cv2.putText(
                 frame,
+                f"Detection FPS: {detection_fps:.1f}",
+                (20, 270),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (255, 255, 255),
+                3,
+                cv2.LINE_AA
+            )
+
+            cv2.putText(
+                frame,
                 f"Camera: {camera_status['mode'].upper()}",
                 (20, 225),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -464,6 +546,9 @@ def main(headless=False):
         # ---------------------------------------------
         # CLEANUP
         # ---------------------------------------------
+
+        if detection_worker is not None:
+            detection_worker.stop()
 
         if camera is not None:
             try:
