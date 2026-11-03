@@ -3,6 +3,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -14,6 +15,8 @@ from config.settings import (
     TRIG_PIN,
     ECHO_PIN,
     MAX_DISTANCE_METERS,
+    CAMERA_WIDTH,
+    CAMERA_HEIGHT,
     CONFIDENCE_THRESHOLD,
     IMAGE_SIZE,
     MODEL_PATH,
@@ -27,7 +30,10 @@ RASPBERRY_PI_DIR = Path(__file__).resolve().parents[1]
 if str(RASPBERRY_PI_DIR) not in sys.path:
     sys.path.insert(0, str(RASPBERRY_PI_DIR))
 
-from camera.day_night_controller import DayNightCameraController
+from camera.day_night_controller import (
+    CameraConfig,
+    DayNightCameraController
+)
 
 
 # =========================================================
@@ -73,7 +79,7 @@ def get_distance_status(distance):
 # DRAWING
 # =========================================================
 
-def draw_persons(frame, result, color):
+def draw_persons(frame, result, color, displayed_at):
 
     person_count = 0
 
@@ -81,6 +87,11 @@ def draw_persons(frame, result, color):
         return person_count
 
     boxes = result.boxes
+    scale = max(0.7, min(1.1, frame.shape[1] / 1280))
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.75 * scale
+    thickness = max(2, round(2 * scale))
+    padding = max(5, round(8 * scale))
 
     for index, box in enumerate(boxes):
 
@@ -96,30 +107,81 @@ def draw_persons(frame, result, color):
                 boxes.id[index].item()
             )
 
-        label = (
-            f"ID-{person_id}"
+        id_label = (
+            f"ID: {person_id}"
             if person_id is not None
-            else "PERSON"
+            else "ID: en attente"
+        )
+        date_label = displayed_at
+        id_size, id_baseline = cv2.getTextSize(
+            id_label,
+            font,
+            font_scale,
+            thickness
+        )
+        date_size, date_baseline = cv2.getTextSize(
+            date_label,
+            font,
+            font_scale,
+            thickness
+        )
+        label_width = max(id_size[0], date_size[0]) + padding * 2
+        label_height = (
+            id_size[1]
+            + date_size[1]
+            + id_baseline
+            + date_baseline
+            + padding * 3
         )
 
-        # Bounding box
         cv2.rectangle(
             frame,
             (x1, y1),
             (x2, y2),
             color,
-            3
+            max(2, round(3 * scale))
         )
 
-        # Label
+        label_x = min(
+            max(0, x1),
+            max(0, frame.shape[1] - label_width)
+        )
+        label_y = y2 + 1
+        if label_y + label_height > frame.shape[0]:
+            label_y = max(0, y1 - label_height)
+
+        cv2.rectangle(
+            frame,
+            (label_x, label_y),
+            (
+                min(frame.shape[1] - 1, label_x + label_width),
+                min(frame.shape[0] - 1, label_y + label_height)
+            ),
+            color,
+            cv2.FILLED
+        )
         cv2.putText(
             frame,
-            label,
-            (x1, max(25, y1 - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            color,
-            2
+            id_label,
+            (label_x + padding, label_y + padding + id_size[1]),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA
+        )
+        cv2.putText(
+            frame,
+            date_label,
+            (
+                label_x + padding,
+                label_y + padding * 2 + id_size[1] + date_size[1]
+            ),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA
         )
 
         person_count += 1
@@ -144,7 +206,12 @@ def main(headless=False):
 
         logger.info("Initializing camera controller...")
 
-        camera = DayNightCameraController()
+        camera = DayNightCameraController(
+            CameraConfig(
+                width=CAMERA_WIDTH,
+                height=CAMERA_HEIGHT
+            )
+        )
         camera.start()
 
         # -------------------------------------------------
@@ -205,6 +272,7 @@ def main(headless=False):
             # ---------------------------------------------
 
             camera_status = camera.get_status()
+            displayed_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
             # ---------------------------------------------
             # C. MEASURE DISTANCE
@@ -237,7 +305,8 @@ def main(headless=False):
             person_count = draw_persons(
                 frame,
                 result,
-                color
+                color,
+                displayed_at
             )
 
             # ---------------------------------------------
@@ -272,51 +341,56 @@ def main(headless=False):
             cv2.putText(
                 frame,
                 f"Distance: {distance_text}",
-                (20, 35),
+                (20, 45),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.0,
                 color,
-                2
+                3,
+                cv2.LINE_AA
             )
 
             cv2.putText(
                 frame,
                 f"Status: {status}",
-                (20, 70),
+                (20, 90),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.0,
                 color,
-                2
+                3,
+                cv2.LINE_AA
             )
 
             cv2.putText(
                 frame,
                 f"Persons: {person_count}",
-                (20, 105),
+                (20, 135),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.0,
                 (255, 255, 255),
-                2
+                3,
+                cv2.LINE_AA
             )
 
             cv2.putText(
                 frame,
                 f"FPS: {fps:.1f}",
-                (20, 140),
+                (20, 180),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.0,
                 (255, 255, 255),
-                2
+                3,
+                cv2.LINE_AA
             )
 
             cv2.putText(
                 frame,
                 f"Camera: {camera_status['mode'].upper()}",
-                (20, 175),
+                (20, 225),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.0,
                 (255, 255, 255),
-                2
+                3,
+                cv2.LINE_AA
             )
 
             # ---------------------------------------------

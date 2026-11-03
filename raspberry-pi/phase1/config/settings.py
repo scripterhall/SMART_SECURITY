@@ -4,9 +4,9 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[1]
 
 # Caméra
-CAMERA_WIDTH = 2592
-CAMERA_HEIGHT = 1944
-CAMERA_FPS = 30
+CAMERA_WIDTH = 1280
+CAMERA_HEIGHT = 960
+CAMERA_FPS = 25
 
 # Modèle IA
 MODEL_PATH = BASE_DIR / "models" / "detection" / "yolo26n.pt"
