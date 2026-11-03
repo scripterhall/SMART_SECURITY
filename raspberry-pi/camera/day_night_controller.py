@@ -146,45 +146,23 @@ class DayNightCameraController:
 
     def _measure_brightness(self, frame: np.ndarray) -> float:
         """
-            Calcule la luminosité en compensant l'exposition
-            et le gain analogique appliqués à la capture.
-
-            La référence est :
-                Exposure = 10000 us
-                Gain = 2.0
+        Mesure directement la luminosité de l'image.
+        Aucun facteur de compensation d'exposition ou de gain.
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
-        # Médiane : moins sensible aux zones très lumineuses
-        # et aux pixels isolés.
-        raw_brightness = float(np.percentile(gray, 50))
-
-        # Compensation de l'exposition et du gain.
-        exposure_ratio = (
-            self.config.reference_exposure_us
-            / max(self._current_exposure, 1)
-        )
-
-        gain_ratio = (
-            self.config.reference_gain
-            / max(self._current_gain, 0.1)
-        )
-
-        normalized = raw_brightness * exposure_ratio * gain_ratio
-
-        # Limitation à l'échelle 8 bits.
-        return float(np.clip(normalized, 0, 255))
+        # Moyenne des pixels, moins sensible aux pixels isolés
+        return float(np.mean(gray))
 
     def _update_day_night_mode(self, brightness: float):
         """
-        Détection jour/nuit avec filtrage temporel
-        et hystérésis.
+        Détection jour/nuit avec hystérésis.
         """
 
         if self._brightness_ema is None:
             self._brightness_ema = brightness
         else:
-            alpha = self.config.brightness_alpha
+            alpha = 0.20
 
             self._brightness_ema = (
                 alpha * brightness
@@ -193,22 +171,17 @@ class DayNightCameraController:
 
         previous_mode = self._mode
 
-        if (
-            self._mode == "day"
-            and self._brightness_ema < self.config.night_threshold
-        ):
-            self._mode = "night"
+        if self._mode == "day":
+            if self._brightness_ema < 40:
+                self._mode = "night"
 
-        elif (
-            self._mode == "night"
-            and self._brightness_ema > self.config.day_threshold
-        ):
-            self._mode = "day"
+        elif self._mode == "night":
+            if self._brightness_ema > 44:
+                self._mode = "day"
 
         if previous_mode != self._mode:
             self.logger.info(
-                "Changement de mode : %s -> %s | "
-                "Luminosité brute normalisée : %.2f",
+                "MODE %s -> %s | Luminosité=%.2f",
                 previous_mode,
                 self._mode,
                 self._brightness_ema
