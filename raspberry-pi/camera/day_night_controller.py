@@ -125,7 +125,7 @@ class DayNightCameraController:
 
         gray = cv2.cvtColor(
             frame,
-            cv2.COLOR_RGB2GRAY
+            cv2.COLOR_BGR2GRAY
         )
 
         return float(np.percentile(gray, 50))
@@ -136,13 +136,11 @@ class DayNightCameraController:
 
     def _process_frame(
         self,
-        rgb_frame: np.ndarray,
+        frame: np.ndarray,
         brightness_filter: bool = False
     ):
-        processed = cv2.cvtColor(
-            rgb_frame,
-            cv2.COLOR_RGB2BGR
-        )
+        # Picamera2's RGB888 buffer is BGR-ordered for OpenCV.
+        processed = frame
 
         if brightness_filter:
             processed = cv2.convertScaleAbs(
@@ -164,10 +162,10 @@ class DayNightCameraController:
             try:
 
                 # Capture image.
-                rgb_frame = self.camera.capture_array()
+                frame = self.camera.capture_array()
 
                 brightness = self._measure_brightness(
-                    rgb_frame
+                    frame
                 )
 
                 brightness_filter = (
@@ -176,7 +174,7 @@ class DayNightCameraController:
                 )
 
                 processed = self._process_frame(
-                    rgb_frame,
+                    frame,
                     brightness_filter=brightness_filter
                 )
 
