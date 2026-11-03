@@ -1,7 +1,9 @@
 
 import argparse
 import logging
+import math
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -52,13 +54,54 @@ logger = logging.getLogger("SmartSecurity")
 # DISTANCE SENSOR
 # =========================================================
 
-def get_distance(sensor):
+class DistanceReader:
 
-    try:
-        return sensor.distance * 100
+    def __init__(self, sensor):
+        self.sensor = sensor
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._read_loop,
+            name="ultrasonic-reader",
+            daemon=True
+        )
+        self._distance = None
+        self._updated_at = 0.0
 
-    except Exception:
-        return None
+    def start(self):
+        self._thread.start()
+
+    def _read_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                distance = float(self.sensor.distance) * 100
+                if not math.isfinite(distance):
+                    raise ValueError("Ultrasonic sensor returned a non-finite value")
+
+                with self._lock:
+                    self._distance = distance
+                    self._updated_at = time.monotonic()
+
+            except Exception:
+                logger.exception("Ultrasonic distance read failed")
+                with self._lock:
+                    self._distance = None
+                    self._updated_at = 0.0
+                self._stop_event.wait(0.1)
+                continue
+
+            self._stop_event.wait(0.05)
+
+    def get_distance(self):
+        with self._lock:
+            if time.monotonic() - self._updated_at > 0.5:
+                return None
+            return self._distance
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
 
 
 def get_distance_status(distance):
@@ -197,6 +240,7 @@ def main(headless=False):
 
     camera = None
     sensor = None
+    distance_reader = None
 
     try:
 
@@ -224,8 +268,11 @@ def main(headless=False):
             echo=ECHO_PIN,
             trigger=TRIG_PIN,
             max_distance=MAX_DISTANCE_METERS,
-            queue_len=5
+            queue_len=3,
+            partial=True
         )
+        distance_reader = DistanceReader(sensor)
+        distance_reader.start()
 
         # -------------------------------------------------
         # 3. LOAD YOLO MODEL
@@ -275,14 +322,6 @@ def main(headless=False):
             displayed_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
             # ---------------------------------------------
-            # C. MEASURE DISTANCE
-            # ---------------------------------------------
-
-            distance = get_distance(sensor)
-
-            status, color = get_distance_status(distance)
-
-            # ---------------------------------------------
             # D. HUMAN DETECTION + TRACKING
             # ---------------------------------------------
 
@@ -297,6 +336,11 @@ def main(headless=False):
             )
 
             result = results[0]
+
+            # Use the latest sensor reading after inference, so a slow
+            # detection pass does not make the displayed distance stale.
+            distance = distance_reader.get_distance()
+            status, color = get_distance_status(distance)
 
             # ---------------------------------------------
             # E. DRAW DETECTED PERSONS
@@ -428,6 +472,8 @@ def main(headless=False):
                 logger.exception("Failed to stop camera cleanly")
 
         if sensor is not None:
+            if distance_reader is not None:
+                distance_reader.stop()
             try:
                 sensor.close()
             except Exception:
