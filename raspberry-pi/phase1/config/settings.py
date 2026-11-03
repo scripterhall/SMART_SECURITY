@@ -4,8 +4,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[1]
 
 # Caméra
-CAMERA_WIDTH = 1280
-CAMERA_HEIGHT = 720
+CAMERA_WIDTH = 1640
+CAMERA_HEIGHT = 1232
 CAMERA_FPS = 30
 
 # Modèle IA
