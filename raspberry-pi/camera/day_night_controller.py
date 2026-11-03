@@ -232,6 +232,13 @@ class DayNightCameraController:
                 )
 
                 self._update_day_night_mode(brightness)
+                if int(time.monotonic()) % 2 == 0:
+                    self.logger.info(
+                        "Luminosité brute=%.2f | Filtrée=%.2f | Mode=%s",
+                        brightness,
+                        self._brightness_ema,
+                        self._mode
+                    )
 
                 self._adjust_exposure(brightness)
 
