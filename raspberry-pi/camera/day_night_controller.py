@@ -22,7 +22,7 @@ class CameraConfig:
 
     # Seuils de luminosité avec hystérésis
     night_threshold: float = 40.0
-    day_threshold: float = 45.0
+    day_threshold: float = 44.0
 
     # Exposition : microsecondes
     day_exposure_us: int = 10000
