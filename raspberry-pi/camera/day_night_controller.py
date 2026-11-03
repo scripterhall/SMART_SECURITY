@@ -22,7 +22,6 @@ class CameraConfig:
 
     brightness_filter_start: datetime_time = datetime_time(19, 30)
     brightness_boost: int = 8
-    low_light_color_threshold: float = 80.0
 
     tuning_file: str = (
         "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json"
@@ -52,15 +51,6 @@ class DayNightCameraController:
 
         self._fps_count = 0
         self._fps_start = time.monotonic()
-
-        self._low_light_color_matrix = np.array(
-            [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.95],
-            ],
-            dtype=np.float32
-        )
 
         self.logger = logging.getLogger("CameraController")
 
@@ -147,17 +137,10 @@ class DayNightCameraController:
     def _process_frame(
         self,
         frame: np.ndarray,
-        brightness: float,
         brightness_filter: bool = False
     ):
+        # Picamera2's RGB888 buffer is BGR-ordered for OpenCV.
         processed = frame
-
-        if brightness < self.config.low_light_color_threshold:
-            # Slightly reduce blue and warm red tones in dim scenes.
-            processed = cv2.transform(
-                processed,
-                self._low_light_color_matrix
-            )
 
         if brightness_filter:
             processed = cv2.convertScaleAbs(
@@ -192,7 +175,6 @@ class DayNightCameraController:
 
                 processed = self._process_frame(
                     frame,
-                    brightness=brightness,
                     brightness_filter=brightness_filter
                 )
 
