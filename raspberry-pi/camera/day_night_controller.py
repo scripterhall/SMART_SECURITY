@@ -19,7 +19,7 @@ class CameraConfig:
     frame_duration_min: int = 40000
     frame_duration_max: int = 100000
 
-    brightness_filter_threshold: float = 120.0
+    brightness_filter_threshold: float = 140.0
     brightness_boost: int = 8
 
     tuning_file: str = (
