@@ -20,9 +20,16 @@ class CameraConfig:
     frame_duration_min: int = 40000
     frame_duration_max: int = 66667
 
-    # Seuils de luminosité avec hystérésis
+    # Seuils de luminosité normalisée
     night_threshold: float = 40.0
     day_threshold: float = 44.0
+
+    # Filtrage temporel
+    brightness_alpha: float = 0.20
+
+    # Référence de normalisation
+    reference_exposure_us: int = 10000
+    reference_gain: float = 2.0
 
     # Exposition : microsecondes
     day_exposure_us: int = 10000
@@ -35,6 +42,10 @@ class CameraConfig:
 
     # Mise à jour des réglages
     control_interval: float = 1.0
+
+    # Paramètres de mesure indépendants du mode
+    metering_exposure_us: int = 10000
+    metering_gain: float = 2.0
 
     tuning_file: str = (
         "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json"
@@ -134,38 +145,74 @@ class DayNightCameraController:
         self.logger.info("Caméra démarrée")
 
     def _measure_brightness(self, frame: np.ndarray) -> float:
-        gray = cv2.cvtColor(
-            frame,
-            cv2.COLOR_RGB2GRAY
+        """
+            Calcule la luminosité en compensant l'exposition
+            et le gain analogique appliqués à la capture.
+
+            La référence est :
+                Exposure = 10000 us
+                Gain = 2.0
+        """
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+
+        # Médiane : moins sensible aux zones très lumineuses
+        # et aux pixels isolés.
+        raw_brightness = float(np.percentile(gray, 50))
+
+        # Compensation de l'exposition et du gain.
+        exposure_ratio = (
+            self.config.reference_exposure_us
+            / max(self._current_exposure, 1)
         )
 
-        # On évite que quelques zones très lumineuses
-        # faussent toute la mesure.
-        return float(np.percentile(gray, 50))
+        gain_ratio = (
+            self.config.reference_gain
+            / max(self._current_gain, 0.1)
+        )
+
+        normalized = raw_brightness * exposure_ratio * gain_ratio
+
+        # Limitation à l'échelle 8 bits.
+        return float(np.clip(normalized, 0, 255))
 
     def _update_day_night_mode(self, brightness: float):
+        """
+        Détection jour/nuit avec filtrage temporel
+        et hystérésis.
+        """
+
         if self._brightness_ema is None:
             self._brightness_ema = brightness
         else:
-            alpha = 0.10
+            alpha = self.config.brightness_alpha
+
             self._brightness_ema = (
                 alpha * brightness
                 + (1 - alpha) * self._brightness_ema
             )
+
+        previous_mode = self._mode
 
         if (
             self._mode == "day"
             and self._brightness_ema < self.config.night_threshold
         ):
             self._mode = "night"
-            self.logger.info("Passage en mode NUIT")
 
         elif (
             self._mode == "night"
             and self._brightness_ema > self.config.day_threshold
         ):
             self._mode = "day"
-            self.logger.info("Passage en mode JOUR")
+
+        if previous_mode != self._mode:
+            self.logger.info(
+                "Changement de mode : %s -> %s | "
+                "Luminosité brute normalisée : %.2f",
+                previous_mode,
+                self._mode,
+                self._brightness_ema
+            )
 
     def _adjust_exposure(self, brightness: float):
         now = time.monotonic()
