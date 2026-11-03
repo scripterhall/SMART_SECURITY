@@ -1,15 +1,16 @@
+
 import argparse
+import logging
 import time
+
 import cv2
 
-from picamera2 import Picamera2
 from gpiozero import DistanceSensor
 from ultralytics import YOLO
 
+from camera.day_night_controller import DayNightCameraController
+
 from config.settings import (
-    CAMERA_WIDTH,
-    CAMERA_HEIGHT,
-    CAMERA_FPS,
     TRIG_PIN,
     ECHO_PIN,
     MAX_DISTANCE_METERS,
@@ -23,14 +24,28 @@ from config.settings import (
 )
 
 
+# =========================================================
+# LOGGING
+# =========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+
+logger = logging.getLogger("SmartSecurity")
+
+
+# =========================================================
+# DISTANCE SENSOR
+# =========================================================
+
 def get_distance(sensor):
 
     try:
-
         return sensor.distance * 100
 
     except Exception:
-
         return None
 
 
@@ -48,58 +63,146 @@ def get_distance_status(distance):
     return "NORMAL", (0, 255, 0)
 
 
+# =========================================================
+# DRAWING
+# =========================================================
+
+def draw_persons(frame, result, color):
+
+    person_count = 0
+
+    if result.boxes is None:
+        return person_count
+
+    boxes = result.boxes
+
+    for index, box in enumerate(boxes):
+
+        x1, y1, x2, y2 = map(
+            int,
+            box.xyxy[0].tolist()
+        )
+
+        person_id = None
+
+        if boxes.id is not None:
+            person_id = int(
+                boxes.id[index].item()
+            )
+
+        label = (
+            f"ID-{person_id}"
+            if person_id is not None
+            else "PERSON"
+        )
+
+        # Bounding box
+        cv2.rectangle(
+            frame,
+            (x1, y1),
+            (x2, y2),
+            color,
+            3
+        )
+
+        # Label
+        cv2.putText(
+            frame,
+            label,
+            (x1, max(25, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            color,
+            2
+        )
+
+        person_count += 1
+
+    return person_count
+
+
+# =========================================================
+# MAIN APPLICATION
+# =========================================================
+
 def main(headless=False):
 
-    print("Initializing camera...")
-
-    camera = Picamera2()
-
-    camera_config = camera.create_preview_configuration(
-        main={
-            "size": (CAMERA_WIDTH, CAMERA_HEIGHT),
-            "format": "RGB888"
-        },
-        controls={"FrameRate": CAMERA_FPS}
-    )
-
-    camera.configure(camera_config)
-
-    print("Initializing HC-SR04...")
-
-    sensor = DistanceSensor(
-        echo=ECHO_PIN,
-        trigger=TRIG_PIN,
-        max_distance=MAX_DISTANCE_METERS,
-        queue_len=5
-    )
-
-    print("Loading AI model...")
-
-    model = YOLO(str(MODEL_PATH))
-
-    camera.start()
-
-    time.sleep(2)
-
-    print("Smart Security System started")
-
-    previous_time = time.perf_counter()
-
-    fps = 0.0
+    camera = None
+    sensor = None
 
     try:
 
+        # -------------------------------------------------
+        # 1. INITIALIZE CAMERA CONTROLLER
+        # -------------------------------------------------
+
+        logger.info("Initializing camera controller...")
+
+        camera = DayNightCameraController()
+        camera.start()
+
+        # -------------------------------------------------
+        # 2. INITIALIZE HC-SR04
+        # -------------------------------------------------
+
+        logger.info("Initializing HC-SR04...")
+
+        sensor = DistanceSensor(
+            echo=ECHO_PIN,
+            trigger=TRIG_PIN,
+            max_distance=MAX_DISTANCE_METERS,
+            queue_len=5
+        )
+
+        # -------------------------------------------------
+        # 3. LOAD YOLO MODEL
+        # -------------------------------------------------
+
+        logger.info("Loading YOLO model...")
+
+        model = YOLO(str(MODEL_PATH))
+
+        logger.info("YOLO model loaded successfully")
+
+        # -------------------------------------------------
+        # 4. START APPLICATION
+        # -------------------------------------------------
+
+        logger.info("Smart Security System started")
+
+        previous_time = time.perf_counter()
+        fps = 0.0
+
         while True:
 
-            # 1. Capture image
-            frame = camera.capture_array()
+            # ---------------------------------------------
+            # A. GET CAMERA FRAME
+            # ---------------------------------------------
 
-            # 2. Measure distance
+            frame = camera.get_frame()
+
+            if frame is None:
+                time.sleep(0.01)
+                continue
+
+            # ---------------------------------------------
+            # B. GET CAMERA STATUS
+            # ---------------------------------------------
+
+            camera_status = camera.get_status()
+
+            # ---------------------------------------------
+            # C. MEASURE DISTANCE
+            # ---------------------------------------------
+
             distance = get_distance(sensor)
 
             status, color = get_distance_status(distance)
 
-            # 3. Person detection and tracking
+            # ---------------------------------------------
+            # D. HUMAN DETECTION + TRACKING
+            # ---------------------------------------------
+
             results = model.track(
                 frame,
                 persist=True,
@@ -112,57 +215,26 @@ def main(headless=False):
 
             result = results[0]
 
-            # 4. Draw detected persons
-            if result.boxes is not None:
+            # ---------------------------------------------
+            # E. DRAW DETECTED PERSONS
+            # ---------------------------------------------
 
-                boxes = result.boxes
+            person_count = draw_persons(
+                frame,
+                result,
+                color
+            )
 
-                for index, box in enumerate(boxes):
+            # ---------------------------------------------
+            # F. CALCULATE FPS
+            # ---------------------------------------------
 
-                    x1, y1, x2, y2 = map(
-                        int,
-                        box.xyxy[0].tolist()
-                    )
-
-                    person_id = None
-
-                    if boxes.id is not None:
-
-                        person_id = int(
-                            boxes.id[index].item()
-                        )
-
-                    label = (
-                        f"ID-{person_id}"
-                        if person_id is not None
-                        else "PERSON"
-                    )
-
-                    # Color indicative de la proximité globale.
-                    cv2.rectangle(
-                        frame,
-                        (x1, y1),
-                        (x2, y2),
-                        color,
-                        2
-                    )
-
-                    cv2.putText(
-                        frame,
-                        label,
-                        (x1, max(20, y1 - 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        color,
-                        2
-                    )
-
-            # 5. FPS calculation
             current_time = time.perf_counter()
 
             elapsed = current_time - previous_time
 
             if elapsed > 0:
+
                 instantaneous_fps = 1.0 / elapsed
 
                 fps = (
@@ -172,7 +244,10 @@ def main(headless=False):
 
             previous_time = current_time
 
-            # 6. Display system information
+            # ---------------------------------------------
+            # G. SYSTEM INFORMATION
+            # ---------------------------------------------
+
             distance_text = (
                 f"{distance:.1f} cm"
                 if distance is not None
@@ -184,7 +259,7 @@ def main(headless=False):
                 f"Distance: {distance_text}",
                 (20, 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
+                0.8,
                 color,
                 2
             )
@@ -192,45 +267,86 @@ def main(headless=False):
             cv2.putText(
                 frame,
                 f"Status: {status}",
-                (20, 65),
+                (20, 70),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
+                0.8,
                 color,
                 2
             )
 
             cv2.putText(
                 frame,
-                f"FPS: {fps:.1f}",
-                (20, 95),
+                f"Persons: {person_count}",
+                (20, 105),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
+                0.8,
                 (255, 255, 255),
                 2
             )
 
-            # 7. Display
+            cv2.putText(
+                frame,
+                f"FPS: {fps:.1f}",
+                (20, 140),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 255),
+                2
+            )
+
+            cv2.putText(
+                frame,
+                f"Camera: {camera_status['mode'].upper()}",
+                (20, 175),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 255),
+                2
+            )
+
+            # ---------------------------------------------
+            # H. DISPLAY
+            # ---------------------------------------------
+
             if not headless:
 
-                cv2.imshow(WINDOW_NAME, frame)
+                cv2.imshow(
+                    WINDOW_NAME,
+                    frame
+                )
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
     except KeyboardInterrupt:
 
-        print("Stopping application...")
+        logger.info("Stopping application...")
+
+    except Exception:
+
+        logger.exception("Application error")
 
     finally:
 
-        camera.stop()
-        sensor.close()
+        # ---------------------------------------------
+        # CLEANUP
+        # ---------------------------------------------
+
+        if camera is not None:
+            camera.stop()
+
+        if sensor is not None:
+            sensor.close()
 
         if not headless:
             cv2.destroyAllWindows()
 
-        print("System stopped successfully")
+        logger.info("System stopped successfully")
 
+
+# =========================================================
+# ENTRY POINT
+# =========================================================
 
 if __name__ == "__main__":
 
