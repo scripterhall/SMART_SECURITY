@@ -9,7 +9,7 @@ def main():
 
     config = camera.create_preview_configuration(
         main={
-            "size": (1280, 720),
+            "size": (2592, 1944),
             "format": "RGB888"
         }
     )
