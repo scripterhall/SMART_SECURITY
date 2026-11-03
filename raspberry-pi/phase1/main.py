@@ -9,6 +9,7 @@ from ultralytics import YOLO
 from config.settings import (
     CAMERA_WIDTH,
     CAMERA_HEIGHT,
+    CAMERA_FPS,
     TRIG_PIN,
     ECHO_PIN,
     MAX_DISTANCE_METERS,
@@ -57,7 +58,8 @@ def main(headless=False):
         main={
             "size": (CAMERA_WIDTH, CAMERA_HEIGHT),
             "format": "RGB888"
-        }
+        },
+        controls={"FrameRate": CAMERA_FPS}
     )
 
     camera.configure(camera_config)
