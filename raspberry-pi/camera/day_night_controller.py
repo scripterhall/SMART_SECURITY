@@ -3,7 +3,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as datetime_time
 from typing import Optional
 
 import cv2
@@ -20,7 +19,7 @@ class CameraConfig:
     frame_duration_min: int = 40000
     frame_duration_max: int = 100000
 
-    brightness_filter_start: datetime_time = datetime_time(19, 30)
+    brightness_filter_threshold: float = 120.0
     brightness_boost: int = 8
 
     tuning_file: str = (
@@ -169,8 +168,7 @@ class DayNightCameraController:
                 )
 
                 brightness_filter = (
-                    datetime.now().time()
-                    >= self.config.brightness_filter_start
+                    brightness < self.config.brightness_filter_threshold
                 )
 
                 processed = self._process_frame(
